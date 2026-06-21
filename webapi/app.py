@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 ALLOWED_EXTENSIONS = {".xml", ".mxl", ".mid", ".midi", ".mscz", ".mscx", ".txt"}
+TEXT_OUTPUT_INPUTS = {".mid", ".midi", ".txt"}
 VALID_HAND_SIZES = {"XXS", "XS", "S", "M", "L", "XL", "XXL"}
 INDEX_HTML = Path(__file__).with_name("index.html")
 IMAGES_DIR = Path(__file__).with_name("images")
@@ -103,7 +104,8 @@ async def annotate(
         with TemporaryDirectory(prefix="pianoplayer_webapi_") as tmpdir:
             tmp = Path(tmpdir)
             input_path = tmp / f"input{suffix}"
-            output_path = tmp / "annotated.xml"
+            output_suffix = ".txt" if suffix in TEXT_OUTPUT_INPUTS else ".xml"
+            output_path = tmp / f"annotated{output_suffix}"
             input_path.write_bytes(content)
 
             await run_in_threadpool(
@@ -152,11 +154,15 @@ async def annotate(
         raise HTTPException(status_code=500, detail="Internal server error.") from exc
 
     base_name = Path(incoming_name).stem or "annotated"
-    download_name = f"{base_name}_annotated.xml"
+    download_name = f"{base_name}_annotated{output_path.suffix}"
     headers = {"Content-Disposition": f'attachment; filename="{download_name}"'}
     return Response(
         content=output_bytes,
-        media_type="application/vnd.recordare.musicxml+xml",
+        media_type=(
+            "text/tab-separated-values; charset=utf-8"
+            if output_path.suffix == ".txt"
+            else "application/vnd.recordare.musicxml+xml"
+        ),
         headers=headers,
     )
 

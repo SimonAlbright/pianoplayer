@@ -88,8 +88,8 @@ Example command line:
 `pianoplayer scores/bach_invention4.xml -n 10 -r -v -z -m`  
 This annotates the first 10 measures for the right hand, opens 3D playback, and then opens MuseScore.
 
-The output is saved as a [MusicXML](https://en.wikipedia.org/wiki/MusicXML)
-file with name `output.xml`.<br />
+MusicXML/MuseScore inputs default to `output.xml`. MIDI/PIG inputs default to
+annotated tabular output in `output.txt`.<br />
 
 Pre-fingered notes are supported: if a note already has a fingering mark, `PianoPlayer` keeps it
 and uses it as an anchor for the following optimization.
@@ -110,7 +110,7 @@ pianoplayer [-h] [--gui] [-o] [-n] [-s] [-d] [-rpart] [-lpart] [--rstaff] [--lst
 # Optional arguments:
 #   -h, --help            show this help message and exit
 #   --gui                 Launch the Tkinter GUI
-#   -o , --outputfile     Annotated output xml file name
+#   -o , --outputfile     Annotated output file name
 #   -n , --n-measures     [1000] Number of score measures to scan
 #   -s , --start-measure  Start from measure number [1]
 #   -d , --depth          [auto] Depth of combinatorial search, [5-9]
@@ -146,7 +146,7 @@ Run `pianoplayer` with no filename to open the GUI, then:
 ![newgui](https://github.com/user-attachments/assets/d65a2fdb-2efd-4b5b-98e6-ba1ad1328dca)
 
 - press **Import Score** (valid formats: *MusicXML/MXL, MuseSsore, MIDI, [PIG](http://beam.kisarazu.ac.jp/~saito/research/PianoFingeringDataset/)*)
-- press **GENERATE** (`output.xml` is written)
+- press **GENERATE** (`output.xml` for score inputs or `output.txt` for MIDI/PIG)
 - press **Musescore** to visualize the annotated score (Linux/macOS only)
 - press **Quit** (or `q` / `Ctrl+W`) to close the GUI
 - In **Advanced**, keep **Auto hand routing** enabled for default behavior, or disable it to set

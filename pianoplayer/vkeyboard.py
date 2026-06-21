@@ -24,6 +24,12 @@ console = Console()
 
 def note_name(n):
     """Return a normalized pitch name used by the keyboard key map."""
+    pitch = getattr(n, "pitch", None)
+    if isinstance(pitch, (int, float)) and pitch > 0:
+        midi = int(round(pitch))
+        names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+        return names[midi % 12] + str((midi // 12) - 1)
+
     a = n.name + str(n.octave)
     if "--" in a:
         b = a.replace("B--", "A")

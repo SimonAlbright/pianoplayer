@@ -503,7 +503,7 @@ uvicorn webapi.app:app --host 127.0.0.1 --port 8000
 
     <section class="card">
       <p class="subtitle"><span class="spark">✦</span>
-        Upload a score and download the annotated MusicXML output
+        Upload a score and download the annotated output
         <span class="spark">✦</span></p>
       <form id="annotate-form">
         <div class="io-row">
@@ -546,7 +546,7 @@ uvicorn webapi.app:app --host 127.0.0.1 --port 8000
             </div>
 
             <div class="field">
-              <label for="n_measures">Stop at Measure</label>
+              <label for="n_measures">Number of Measures</label>
               <input id="n_measures" name="n_measures" type="number" min="1" value="1000" />
             </div>
           </div>
@@ -689,9 +689,9 @@ uvicorn webapi.app:app --host 127.0.0.1 --port 8000
         </div>
 
         <div class="output-note">
-          <b>Output:</b> the download is a MusicXML file with fingering annotations added to your score.<br />
-          Existing (pre-fingered) anchors are preserved and shown as circled numbers.<br />
-          You can open the result with MuseScore or any MusicXML-compatible viewer.
+          <b>Output:</b> MusicXML inputs return annotated MusicXML; MIDI/PIG inputs return annotated tabular text.<br />
+          Existing anchors are preserved; MusicXML results show them as circled numbers.<br />
+          MusicXML results can be opened with MuseScore or any MusicXML-compatible viewer.
         </div>
       </form>
     </section>

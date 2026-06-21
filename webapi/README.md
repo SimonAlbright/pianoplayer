@@ -3,7 +3,7 @@
 Minimal browser flow:
 1. Upload score file (`.xml`, `.mxl`, `.mid`, `.midi`, `.mscz`, `.mscx`, `.txt`)
 2. Run pianoplayer on the server
-3. Download annotated MusicXML output
+3. Download annotated output (MusicXML for score inputs, tabular text for MIDI/PIG)
 
 ## Run locally
 
@@ -25,4 +25,5 @@ Open:
     `chord_note_stagger_s`
 
 Response:
-- annotated MusicXML file as an attachment (`*_annotated.xml`)
+- annotated MusicXML attachment (`*_annotated.xml`) for MusicXML/MuseScore inputs
+- annotated tabular attachment (`*_annotated.txt`) for MIDI/PIG inputs

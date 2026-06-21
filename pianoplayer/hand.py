@@ -436,9 +436,6 @@ class Hand:
         initial_depth = self.depth
         original_x = None
 
-        if start_measure == 1:
-            start_measure = 0
-
         if self.LR == "left":
             # Reuse right-hand geometry/cost logic by mirroring x-coordinates for LH.
             original_x = [anote.x for anote in self.noteseq]
@@ -477,7 +474,8 @@ class Hand:
                     # Near the tail, disable autodepth but keep manual depth if explicitly set.
                     if self.autodepth:
                         self.autodepth = False
-                        self.depth = 9
+                        # Avoid a 9-note search over repeated padding for short scores.
+                        self.depth = max(3, min(9, n_total - i))
 
                 # Build a fixed-size look-ahead window (tail padded with last note).
                 ninenotes = list(self.noteseq[i : i + 9])

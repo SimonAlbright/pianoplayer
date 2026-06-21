@@ -48,7 +48,14 @@ _COST_COLORMAPS = {
     "plasma": [(13, 8, 135), (126, 3, 168), (203, 71, 119), (248, 149, 64), (240, 249, 33)],
     "magma": [(0, 0, 4), (72, 18, 113), (182, 54, 121), (251, 136, 97), (252, 253, 191)],
     "coolwarm": [(59, 76, 192), (221, 221, 221), (180, 4, 38)],
-    "turbo": [(48, 18, 59), (70, 117, 237), (40, 187, 235), (86, 240, 92), (245, 239, 65), (221, 50, 43)],
+    "turbo": [
+        (48, 18, 59),
+        (70, 117, 237),
+        (40, 187, 235),
+        (86, 240, 92),
+        (245, 239, 65),
+        (221, 50, 43),
+    ],
 }
 
 
@@ -89,6 +96,7 @@ class EventInfo:
     tie_types: set[str]
     notes: list[ET.Element] = field(default_factory=list)
     pitches: list[PitchInfo] = field(default_factory=list)
+    note_tie_types: list[set[str]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -209,6 +217,7 @@ def _drop_shorter_simultaneous_duplicates(events: list[EventInfo]) -> list[Event
 
         kept_pitches: list[PitchInfo] = []
         kept_notes: list[ET.Element] = []
+        kept_note_ties: list[set[str]] = []
         for note_idx, pitch in enumerate(evt.pitches):
             if note_idx in dropped_idx:
                 dropped += 1
@@ -216,12 +225,15 @@ def _drop_shorter_simultaneous_duplicates(events: list[EventInfo]) -> list[Event
             kept_pitches.append(pitch)
             if note_idx < len(evt.notes):
                 kept_notes.append(evt.notes[note_idx])
+            if note_idx < len(evt.note_tie_types):
+                kept_note_ties.append(evt.note_tie_types[note_idx])
 
         if not kept_pitches:
             continue
 
         evt.pitches = kept_pitches
         evt.notes = kept_notes
+        evt.note_tie_types = kept_note_ties
         evt.kind = "note" if len(kept_pitches) == 1 else "chord"
         cleaned_events.append(evt)
 
@@ -307,6 +319,9 @@ def parse_musicxml(filename: str) -> ScoreInfo:
 
         sequential_measure_no = 0
         for measure_el in _children(part_el, "measure"):
+            measure_start = current_offset
+            cursor = measure_start
+            measure_end = measure_start
             raw_measure = (measure_el.attrib.get("number", "0") or "0").strip()
             if raw_measure.isdigit():
                 measure_no = int(raw_measure)
@@ -334,7 +349,7 @@ def parse_musicxml(filename: str) -> ScoreInfo:
                         if duration_el is not None and duration_el.text
                         else 0
                     )
-                    current_offset = max(0.0, current_offset - (duration_raw / divisions))
+                    cursor = max(measure_start, cursor - (duration_raw / divisions))
                     continue
 
                 if _local_name(child.tag) == "forward":
@@ -344,7 +359,8 @@ def parse_musicxml(filename: str) -> ScoreInfo:
                         if duration_el is not None and duration_el.text
                         else 0
                     )
-                    current_offset += duration_raw / divisions
+                    cursor += duration_raw / divisions
+                    measure_end = max(measure_end, cursor)
                     continue
 
                 if _local_name(child.tag) != "note":
@@ -378,14 +394,16 @@ def parse_musicxml(filename: str) -> ScoreInfo:
                         EventInfo(
                             kind="rest",
                             measure=measure_no,
-                            offset=current_offset,
+                            offset=cursor,
                             duration=duration,
                             tie_types=tie_types,
                             notes=[note_el],
                             pitches=[],
+                            note_tie_types=[tie_types],
                         )
                     )
-                    current_offset += duration
+                    cursor += duration
+                    measure_end = max(measure_end, cursor)
                     continue
 
                 # Chord members share the same onset: append to previous note/chord event.
@@ -395,19 +413,25 @@ def parse_musicxml(filename: str) -> ScoreInfo:
                     if pitch is not None:
                         events[-1].pitches.append(pitch)
                     events[-1].tie_types.update(tie_types)
+                    events[-1].note_tie_types.append(tie_types)
                     continue
 
                 evt = EventInfo(
                     kind="note",
                     measure=measure_no,
-                    offset=current_offset,
+                    offset=cursor,
                     duration=duration,
                     tie_types=tie_types,
                     notes=[note_el],
                     pitches=[pitch] if pitch is not None else [],
+                    note_tie_types=[tie_types],
                 )
                 events.append(evt)
-                current_offset += duration
+                cursor += duration
+                measure_end = max(measure_end, cursor)
+
+            # Preserve the furthest endpoint reached by any serialized voice.
+            current_offset = max(measure_end, cursor)
 
         events = _drop_shorter_simultaneous_duplicates(events)
         parts.append(PartInfo(part_id=part_id, events=events))
@@ -432,11 +456,10 @@ def noteseq_from_part(part: PartInfo, chord_note_stagger_s: float = 0.05) -> lis
     for evt in part.events:
         if evt.duration == 0:
             continue
-        # Skip continuation/stop tie events: onset is already represented by the tie start.
-        if evt.tie_types.intersection({"continue", "stop"}):
-            continue
-
         if evt.kind == "note" and evt.pitches:
+            note_ties = evt.note_tie_types[0] if evt.note_tie_types else evt.tie_types
+            if note_ties.intersection({"continue", "stop"}):
+                continue
             p = evt.pitches[0]
             an = INote()
             an.noteID = note_id
@@ -458,13 +481,32 @@ def noteseq_from_part(part: PartInfo, chord_note_stagger_s: float = 0.05) -> lis
             continue
 
         if evt.kind == "chord" and evt.pitches:
-            count = len(evt.pitches)
+            if evt.notes:
+                active_notes = []
+                for note_idx, note_el in enumerate(evt.notes):
+                    pitch = _pitch_from_note(note_el)
+                    if pitch is None:
+                        continue
+                    note_ties = (
+                        evt.note_tie_types[note_idx]
+                        if note_idx < len(evt.note_tie_types)
+                        else evt.tie_types
+                    )
+                    if note_ties.intersection({"continue", "stop"}):
+                        continue
+                    active_notes.append((note_el, pitch))
+            else:
+                active_notes = [(None, pitch) for pitch in evt.pitches]
+
+            count = len(active_notes)
+            if not count:
+                continue
             # Expand one chord event into multiple INote entries.
-            for j, p in enumerate(evt.pitches):
+            for j, (note_el, p) in enumerate(active_notes):
                 an = INote()
                 an.chordID = chord_id
                 an.noteID = note_id
-                an.isChord = True
+                an.isChord = count > 1
                 an.note21 = evt
                 an.name = p.name
                 an.pitch = p.midi
@@ -475,17 +517,14 @@ def noteseq_from_part(part: PartInfo, chord_note_stagger_s: float = 0.05) -> lis
                 an.x = keypos(an)
                 an.time = evt.offset - chord_note_stagger_s * (count - j - 1)
                 an.duration = evt.duration + chord_note_stagger_s * (count - 1)
-                an.staff = _note_staff(evt.notes[j]) if j < len(evt.notes) else 0
+                an.staff = _note_staff(note_el) if note_el is not None else 0
                 an.isBlack = (p.midi % 12) in [1, 3, 6, 8, 10]
-                if j < len(evt.notes):
-                    an.fingering = _extract_note_fingering(evt.notes[j])
+                if note_el is not None:
+                    an.fingering = _extract_note_fingering(note_el)
                     an.is_anchor = an.fingering in {1, 2, 3, 4, 5}
                 noteseq.append(an)
                 note_id += 1
             chord_id += 1
-
-    if len(noteseq) < 2:
-        return []
 
     _mark_colliding_notes_as_chords(noteseq, chord_note_stagger_s=chord_note_stagger_s)
     return noteseq
@@ -615,7 +654,9 @@ def _valid_color_token(value: str | None) -> str | None:
     return None
 
 
-def _color_from_cost(value: float, min_cost: float, max_cost: float, colormap: str = "traffic") -> str:
+def _color_from_cost(
+    value: float, min_cost: float, max_cost: float, colormap: str = "traffic"
+) -> str:
     """Map normalized cost to a selectable gradient colormap."""
     if max_cost <= min_cost:
         t = 0.0
@@ -727,10 +768,10 @@ def annotate_part_with_fingering(
     for evt in part.events:
         if evt.duration == 0:
             continue
-        if evt.tie_types.intersection({"continue", "stop"}):
-            continue
-
         if evt.kind == "note" and evt.notes:
+            note_ties = evt.note_tie_types[0] if evt.note_tie_types else evt.tie_types
+            if note_ties.intersection({"continue", "stop"}):
+                continue
             # Keep writer indexing consistent with `noteseq_from_part`, which only
             # includes pitched notes.
             if not evt.pitches or _pitch_from_note(evt.notes[0]) is None:
@@ -758,12 +799,19 @@ def annotate_part_with_fingering(
         if evt.kind == "chord" and evt.notes:
             # In single-part piano scores, this lets RH/LH annotate only staff 1/2.
             notes_to_annotate = []
-            for note_el in evt.notes:
+            for note_idx, note_el in enumerate(evt.notes):
                 # Keep writer indexing consistent with `noteseq_from_part`, which
                 # skips non-pitched chord members.
                 if _pitch_from_note(note_el) is None:
                     continue
                 if target_staff is not None and _note_staff(note_el) != target_staff:
+                    continue
+                note_ties = (
+                    evt.note_tie_types[note_idx]
+                    if note_idx < len(evt.note_tie_types)
+                    else evt.tie_types
+                )
+                if note_ties.intersection({"continue", "stop"}):
                     continue
                 notes_to_annotate.append(note_el)
             chord_len = len(notes_to_annotate)

@@ -22,10 +22,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-o",
         "--outputfile",
-        metavar="output.xml",
+        metavar="FILE",
         type=str,
-        help="Annotated output xml file name",
-        default="output.xml",
+        help="Annotated output file name (.xml or .txt by input format)",
+        default=None,
     )
     parser.add_argument(
         "-n",
@@ -86,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.set_defaults(auto_routing=True)
     parser.add_argument(
-        "--cost-path", metavar="", type=str, help="Path to save cost function", default=None
+        "--cost-path", metavar="", type=str, help="Path to save per-note cost CSV", default=None
     )
     parser.add_argument("--quiet", help="Switch off verbosity", action="store_true")
     parser.add_argument(
@@ -143,10 +143,11 @@ def build_parser() -> argparse.ArgumentParser:
         "-v", "--with-vedo", help="Play 3D scene after processing", action="store_true"
     )
     parser.add_argument("-z", "--sound-off", help="Disable sound", action="store_true")
-    parser.add_argument(
+    hand_group = parser.add_mutually_exclusive_group()
+    hand_group.add_argument(
         "-l", "--left-only", help="Fingering for left hand only", action="store_true"
     )
-    parser.add_argument(
+    hand_group.add_argument(
         "-r", "--right-only", help="Fingering for right hand only", action="store_true"
     )
     parser.add_argument(
@@ -194,6 +195,8 @@ def main() -> None:
     from pianoplayer import core
 
     try:
+        if args.outputfile is None:
+            args.outputfile = core.default_output_filename(args.filename)
         if not args.quiet and args.filename:
             if args.left_only:
                 hand_mode = "left hand only"

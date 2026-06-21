@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 _MIN_MANUAL_DEPTH = 5
 _MAX_MANUAL_DEPTH = 9
 _HAND_SIZES = {"XXS", "XS", "S", "M", "L", "XL", "XXL"}
+_TEXT_INPUT_EXTENSIONS = {".mid", ".midi", ".txt"}
 
 
 class _ProgressReporter:
@@ -217,6 +218,30 @@ def _as_namespace(args: Any) -> SimpleNamespace:
     return AnnotateOptions.from_namespace(args).to_namespace()
 
 
+def default_output_filename(filename: str) -> str:
+    """Return the supported default output name for an input format."""
+    ext = os.path.splitext(str(filename).lower())[1]
+    return "output.txt" if ext in _TEXT_INPUT_EXTENSIONS else "output.xml"
+
+
+def _normalize_output_filename(args: SimpleNamespace) -> None:
+    """Keep MIDI/PIG processing on its supported tabular output path."""
+    if args.outputfile is None:
+        return
+    input_ext = os.path.splitext(str(args.filename).lower())[1]
+    output_ext = os.path.splitext(str(args.outputfile).lower())[1]
+    if input_ext not in _TEXT_INPUT_EXTENSIONS:
+        return
+    if str(args.outputfile) == "output.xml":
+        args.outputfile = "output.txt"
+        return
+    if output_ext != ".txt":
+        raise ValueError(
+            "MIDI and PIG inputs currently require a .txt output file; "
+            "use '-o output.txt'."
+        )
+
+
 def _run_external(cmd: list[str], context: str) -> None:
     """Execute an external command while silencing stdout/stderr."""
     try:
@@ -260,6 +285,11 @@ def _resolve_musicxml_routing(args: SimpleNamespace, score_info: Any) -> None:
                             break
             if staff_values:
                 single_part_staffs = sorted(staff_values)
+
+            if not args.left_only and not args.right_only and len(single_part_staffs) <= 1:
+                # Annotating both hands would process and overwrite the same stream.
+                args.right_only = True
+                logger.info("Single-staff score detected; auto-routing to right hand only.")
 
         if len(parts) > 1:
             args.rpart = max(0, min(int(args.rpart), len(parts) - 1))
@@ -338,7 +368,7 @@ def load_note_sequences(args):
         ext = os.path.splitext(str(args.filename).lower())[1]
         # Dispatch by input format. MusicXML-like inputs also expose `score_info`.
         if ext in {".mscz", ".mscx"}:
-            xmlfn = str(args.filename).replace(".mscz", ".xml").replace(".mscx", ".xml")
+            xmlfn = os.path.splitext(str(args.filename))[0] + ".xml"
             logger.info("Converting MuseScore file %s -> %s", args.filename, xmlfn)
             _run_external(["musescore", "-f", args.filename, "-o", xmlfn], "MuseScore conversion")
             score_info = parse_musicxml(xmlfn)
@@ -383,6 +413,31 @@ def load_note_sequences(args):
                 ) from exc
 
             pm = pretty_midi.PrettyMIDI(args.filename)
+
+            if not pm.instruments:
+                raise ValueError("MIDI file contains no instrument tracks.")
+
+            instrument_count = len(pm.instruments)
+            if bool(getattr(args, "auto_routing", True)):
+                args.rpart = max(0, min(int(args.rpart), instrument_count - 1))
+                args.lpart = max(0, min(int(args.lpart), instrument_count - 1))
+                if instrument_count == 1 and not args.left_only and not args.right_only:
+                    args.right_only = True
+                    logger.info(
+                        "Single-instrument MIDI detected; auto-routing to right hand only."
+                    )
+            else:
+                selected_instruments = []
+                if not args.left_only:
+                    selected_instruments.append(("right", args.rpart))
+                if not args.right_only:
+                    selected_instruments.append(("left", args.lpart))
+                for label, index in selected_instruments:
+                    if int(index) < 0 or int(index) >= instrument_count:
+                        raise ValueError(
+                            f"Requested {label}-hand MIDI instrument {index}, "
+                            f"but file contains {instrument_count} instrument(s)."
+                        )
 
             if not args.left_only:
                 rh_noteseq = reader_pretty_midi(
@@ -438,6 +493,9 @@ def load_note_sequences(args):
 def generate_hands(args, rh_noteseq, lh_noteseq, progress: _ProgressReporter | None = None):
     """Create and run right/left hand optimizers according to CLI options."""
     args = _as_namespace(args)
+
+    if args.left_only and args.right_only:
+        raise ValueError("--left-only and --right-only cannot be used together")
 
     hand_size = str(getattr(args, "hand_size", "M")).upper()
     if hand_size not in _HAND_SIZES:
@@ -508,7 +566,7 @@ def write_annotated_output(args, score_info, rh, lh):
     rh_color = str(getattr(args, "rh_color", "#d62828"))
     lh_color = str(getattr(args, "lh_color", "#1d4ed8"))
 
-    if os.path.splitext(args.outputfile)[1] == ".txt":
+    if os.path.splitext(args.outputfile)[1].lower() == ".txt":
         # Legacy PIG writer path.
         pig_rows = []
 
@@ -692,6 +750,10 @@ def annotate(args: AnnotateOptions | SimpleNamespace | Any):
     else:
         args = AnnotateOptions.from_namespace(args).to_namespace()
 
+    if args.left_only and args.right_only:
+        raise ValueError("--left-only and --right-only cannot be used together")
+    _normalize_output_filename(args)
+
     # Clamp manual search depth to the supported solver range.
     depth = int(getattr(args, "depth", 0))
     if depth > _MAX_MANUAL_DEPTH:
@@ -813,7 +875,17 @@ def annotate(args: AnnotateOptions | SimpleNamespace | Any):
                 with open(str(cost_path), "w", encoding="utf-8", newline="") as f:
                     writer = csv.writer(f)
                     writer.writerow(
-                        ["hand", "index", "time", "duration", "pitch", "fingering", "cost", "measure", "staff"]
+                        [
+                            "hand",
+                            "index",
+                            "time",
+                            "duration",
+                            "pitch",
+                            "fingering",
+                            "cost",
+                            "measure",
+                            "staff",
+                        ]
                     )
                     for row in rows:
                         writer.writerow(row)
@@ -922,7 +994,7 @@ def annotate(args: AnnotateOptions | SimpleNamespace | Any):
         Console().print(table)
 
         # Show a final "next command" hint when output is not auto-opened.
-        if not args.musescore:
+        if args.outputfile is not None and not args.musescore:
             hint = f"visualize annotated score with command: musescore '{args.outputfile}'"
             panel = Panel(
                 f"[bold]💡 {hint}[/bold]",
@@ -953,5 +1025,5 @@ def annotate(args: AnnotateOptions | SimpleNamespace | Any):
             lh_status,
             lh_count,
         )
-        if not args.musescore:
+        if args.outputfile is not None and not args.musescore:
             logger.info("visualize annotated score with command: musescore '%s'", args.outputfile)

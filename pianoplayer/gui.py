@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from base64 import b64encode
 import platform
 import subprocess
 import sys
-from pathlib import Path
+from base64 import b64encode
 from importlib.resources import read_binary
+from pathlib import Path
 from tkinter import (
     BOTH,
     BooleanVar,
@@ -17,11 +17,13 @@ from tkinter import (
     StringVar,
     TclError,
     Tk,
-    colorchooser as tk_colorchooser,
     messagebox,
 )
 from tkinter import (
     Entry as TkEntry,
+)
+from tkinter import (
+    colorchooser as tk_colorchooser,
 )
 from tkinter import filedialog as tk_filedialog
 from tkinter import font as tkfont
@@ -64,7 +66,9 @@ class PianoGUI(Frame):
         else:
             fallback = None
             if self._scores_dir.exists():
-                candidates = sorted(self._scores_dir.glob("*.xml")) + sorted(self._scores_dir.glob("*.mxl"))
+                candidates = sorted(self._scores_dir.glob("*.xml")) + sorted(
+                    self._scores_dir.glob("*.mxl")
+                )
                 if candidates:
                     fallback = candidates[0]
             default_input = str(fallback) if fallback is not None else ""
@@ -288,7 +292,9 @@ class PianoGUI(Frame):
             row=3, column=1, sticky="w", padx=8, pady=6
         )
 
-        Label(opts, text="Stop at Measure").grid(row=4, column=0, sticky="w", padx=8, pady=6)
+        Label(opts, text="Number of Measures").grid(
+            row=4, column=0, sticky="w", padx=8, pady=6
+        )
         Spinbox(opts, from_=1, to=9999, textvariable=self.n_measures_var, width=8).grid(
             row=4, column=1, sticky="w", padx=8, pady=6
         )
@@ -374,6 +380,7 @@ class PianoGUI(Frame):
                 # Optional fallback to Pillow when tkinter image handlers are missing.
                 try:
                     from io import BytesIO
+
                     from PIL import Image, ImageTk
 
                     image = Image.open(BytesIO(banner_bytes))
@@ -531,7 +538,10 @@ class PianoGUI(Frame):
             (self.rh_color_pick_btn, self.rh_color_var.get()),
             (self.lh_color_pick_btn, self.lh_color_var.get()),
             *(
-                (self.fingering_color_pick_buttons[finger - 1], self.finger_color_vars[finger].get())
+                (
+                    self.fingering_color_pick_buttons[finger - 1],
+                    self.finger_color_vars[finger].get(),
+                )
                 for finger in (1, 2, 3, 4, 5)
             ),
         ):
@@ -581,17 +591,26 @@ class PianoGUI(Frame):
         enabled = bool(self.colorize_hands_var.get())
         cost_mode = bool(self.colorize_by_cost_var.get())
         fingering_mode = bool(self.colorize_by_fingering_var.get())
-        hand_state = ["!disabled"] if enabled and not cost_mode and not fingering_mode else ["disabled"]
-        for widget in (getattr(self, "rh_color_pick_btn", None), getattr(self, "lh_color_pick_btn", None)):
+        hand_state = (
+            ["!disabled"] if enabled and not cost_mode and not fingering_mode else ["disabled"]
+        )
+        for widget in (
+            getattr(self, "rh_color_pick_btn", None),
+            getattr(self, "lh_color_pick_btn", None),
+        ):
             if widget is None:
                 continue
             widget.state(hand_state)
-        cost_state = ["!disabled"] if cost_mode and not enabled and not fingering_mode else ["disabled"]
+        cost_state = (
+            ["!disabled"] if cost_mode and not enabled and not fingering_mode else ["disabled"]
+        )
         for widget in (getattr(self, "cost_colormap_combo", None),):
             if widget is None:
                 continue
             widget.state(cost_state)
-        fingering_state = ["!disabled"] if fingering_mode and not enabled and not cost_mode else ["disabled"]
+        fingering_state = (
+            ["!disabled"] if fingering_mode and not enabled and not cost_mode else ["disabled"]
+        )
         for widget in (getattr(self, "fingering_color_pick_buttons", []) or []):
             if widget is None:
                 continue
@@ -702,6 +721,11 @@ class PianoGUI(Frame):
             messagebox.showerror("PianoPlayer", "Select at least one hand to scan.")
             return
 
+        default_output = core.default_output_filename(filename)
+        if output_file == "output.xml" and default_output == "output.txt":
+            output_file = default_output
+            self.output_file_var.set(output_file)
+
         self.status_var.set(f"Status: Generating {output_file}")
         self.parent.update_idletasks()
         self._set_busy(True)
@@ -793,6 +817,13 @@ class PianoGUI(Frame):
         output_file = self.output_file_var.get().strip() or "output.xml"
         if not Path(output_file).exists():
             messagebox.showinfo("PianoPlayer", "Generate output first.")
+            return
+        if Path(output_file).suffix.lower() == ".txt":
+            messagebox.showinfo(
+                "PianoPlayer",
+                "MIDI/PIG tabular output is not a MusicXML score "
+                "and cannot be opened in MuseScore.",
+            )
             return
 
         self._set_busy(True, alpha=0.8)
