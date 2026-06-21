@@ -75,6 +75,41 @@ def test_mixed_tie_chord_keeps_fresh_attacks(tmp_path: Path) -> None:
     assert [note.pitch for note in seq] == [64, 67]
 
 
+def test_explicit_chord_merges_with_simultaneous_note_from_another_voice(
+    tmp_path: Path,
+) -> None:
+    xml = """<score-partwise><part id="P1"><measure number="1">
+      <attributes><divisions>1</divisions></attributes>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration>
+        <voice>1</voice><staff>1</staff></note>
+      <note><pitch><step>D</step><octave>5</octave></pitch><duration>1</duration>
+        <voice>1</voice><staff>1</staff></note>
+      <backup><duration>2</duration></backup>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration>
+        <voice>2</voice><staff>1</staff></note>
+      <note><chord/><pitch><step>G</step><octave>4</octave></pitch><duration>1</duration>
+        <voice>2</voice><staff>1</staff></note>
+    </measure></part></score-partwise>"""
+    path = tmp_path / "mixed-chord-voices.xml"
+    path.write_text(xml, encoding="utf-8")
+
+    score = parse_musicxml(str(path))
+    seq = noteseq_from_part(score.parts[0])
+    simultaneous = [note for note in seq if note.pitch in {60, 67, 72}]
+
+    assert len({note.chordID for note in simultaneous}) == 1
+    assert all(note.isChord and note.NinChord == 3 for note in simultaneous)
+
+    hand = Hand(seq, side="right")
+    hand.verbose = False
+    hand.autodepth = False
+    hand.depth = 5
+    hand.optimize_seq = lambda *_: ([5] * 9, 0.0)  # type: ignore[method-assign]
+    hand.generate(start_measure=1, nmeasures=1)
+
+    assert len({note.fingering for note in simultaneous}) == 3
+
+
 def test_single_note_and_default_namespace_are_supported(tmp_path: Path) -> None:
     xml = """<score-partwise xmlns="http://www.musicxml.org/ns/musicxml" version="4.0">
       <part id="P1"><measure number="1">

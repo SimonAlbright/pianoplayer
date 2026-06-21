@@ -540,9 +540,9 @@ def _mark_colliding_notes_as_chords(noteseq: list[INote], *, chord_note_stagger_
     """
     groups: dict[tuple[int, int, float], list[INote]] = {}
     for note in noteseq:
-        if note.isChord:
-            continue
-        key = (int(note.measure or 0), int(note.staff or 0), round(float(note.time), 6))
+        source_event = getattr(note, "note21", None)
+        onset = float(getattr(source_event, "offset", note.time))
+        key = (int(note.measure or 0), int(note.staff or 0), round(onset, 6))
         groups.setdefault(key, []).append(note)
 
     next_chord_id = 0
@@ -553,6 +553,15 @@ def _mark_colliding_notes_as_chords(noteseq: list[INote], *, chord_note_stagger_
     stagger = max(0.0, float(chord_note_stagger_s))
     for (_measure, _staff, onset), notes in groups.items():
         if len(notes) < 2:
+            continue
+
+        existing_ids = {int(note.chordID) for note in notes if note.isChord}
+        already_one_chord = (
+            all(note.isChord for note in notes)
+            and len(existing_ids) == 1
+            and all(int(note.NinChord) == len(notes) for note in notes)
+        )
+        if already_one_chord:
             continue
 
         # Use low->high pitch ordering so existing hand-specific chord rules apply.
@@ -567,7 +576,9 @@ def _mark_colliding_notes_as_chords(noteseq: list[INote], *, chord_note_stagger_
             note.chordnr = j
             note.NinChord = count
             note.time = onset - stagger * (count - j - 1)
-            note.duration += stagger * (count - 1)
+            source_event = getattr(note, "note21", None)
+            base_duration = float(getattr(source_event, "duration", note.duration))
+            note.duration = base_duration + stagger * (count - 1)
 
 
 def _valid_output_finger(value: int | str) -> int | None:
