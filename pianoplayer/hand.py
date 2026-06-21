@@ -184,6 +184,37 @@ class Hand:
 
     def ave_velocity(self, fingering: Sequence[int], notes: Sequence[INote]) -> float:
         """Compute average weighted finger velocity for a candidate fingering."""
+        chord_penalty = 0.0
+        chord_seen: dict[int, list[tuple[int, int]]] = {}
+        for i in range(self.depth):
+            n = notes[i]
+            if not n.isChord:
+                continue
+            cid = int(n.chordID)
+            fi = int(fingering[i])
+            if not (1 <= fi <= 5):
+                chord_penalty += 1.0e6
+                continue
+
+            prior = chord_seen.setdefault(cid, [])
+            for p_pitch, p_finger in prior:
+                # Disallow repeated finger on different pitches inside the same chord group.
+                if fi == p_finger and int(n.pitch) != p_pitch:
+                    chord_penalty += 1.0e6
+                    continue
+                # Enforce pitch/finger monotonicity by hand.
+                if self.LR == "right":
+                    if int(n.pitch) > p_pitch and fi <= p_finger:
+                        chord_penalty += 2.0e5
+                    elif int(n.pitch) < p_pitch and fi >= p_finger:
+                        chord_penalty += 2.0e5
+                else:
+                    if int(n.pitch) > p_pitch and fi >= p_finger:
+                        chord_penalty += 2.0e5
+                    elif int(n.pitch) < p_pitch and fi <= p_finger:
+                        chord_penalty += 2.0e5
+            prior.append((int(n.pitch), fi))
+
         # Evaluate candidates from a stable starting posture without mutating shared state.
         finger_positions = list(self.finger_positions)
         self.set_fingers_positions(
@@ -223,7 +254,7 @@ class Hand:
                 force_relaxed=False,
             )
 
-        return vmean / (self.depth - 1)
+        return (vmean / (self.depth - 1)) + chord_penalty
 
     def skip(self, fa: int, fb: int, na: INote, nb: INote, hf: float, lr: str, level: int) -> bool:
         """Return True when a local finger transition is considered invalid/unlikely."""
@@ -334,7 +365,65 @@ class Hand:
                 backtrack(level + 1)
 
         backtrack(0)
+        if minvel >= 1.0e10:
+            # If all branches are pruned by constraints, avoid propagating
+            # the sentinel cost and provide a deterministic fallback.
+            fallback_finger = u_start[0] if u_start else 3
+            best_fingering = [fallback_finger for _ in range(9)]
+            minvel = self.ave_velocity(best_fingering, nseq)
+            logger.debug(
+                "No valid search branch at depth %s; using fallback finger %s.",
+                depth,
+                fallback_finger,
+            )
         return best_fingering, minvel
+
+    def _enforce_chord_group_consistency(self, index: int, finger: int) -> int:
+        """Adjust finger to stay consistent with already-assigned notes in same chord group."""
+        if not (1 <= finger <= 5):
+            return finger
+        note = self.noteseq[index]
+        if not bool(getattr(note, "isChord", False)):
+            return finger
+
+        cid = int(getattr(note, "chordID", 0))
+        note_pitch = int(getattr(note, "pitch", 0))
+        peers: list[tuple[int, int]] = []
+        for prev in self.noteseq[:index]:
+            if not bool(getattr(prev, "isChord", False)):
+                continue
+            if int(getattr(prev, "chordID", 0)) != cid:
+                continue
+            prev_f = abs(int(getattr(prev, "fingering", 0) or 0))
+            if not (1 <= prev_f <= 5):
+                continue
+            peers.append((int(getattr(prev, "pitch", 0)), prev_f))
+
+        if not peers:
+            return finger
+
+        used = {pf for _, pf in peers}
+        candidates = [f for f in (1, 2, 3, 4, 5) if f not in used]
+        if not candidates:
+            candidates = [finger]
+
+        candidates_with_penalty: list[tuple[int, int, int]] = []
+        for cand in candidates:
+            penalty = 0
+            for peer_pitch, peer_finger in peers:
+                if self.LR == "right":
+                    if note_pitch > peer_pitch and cand <= peer_finger:
+                        penalty += 100 + (peer_finger - cand)
+                    elif note_pitch < peer_pitch and cand >= peer_finger:
+                        penalty += 100 + (cand - peer_finger)
+                else:
+                    if note_pitch > peer_pitch and cand >= peer_finger:
+                        penalty += 100 + (cand - peer_finger)
+                    elif note_pitch < peer_pitch and cand <= peer_finger:
+                        penalty += 100 + (peer_finger - cand)
+            candidates_with_penalty.append((penalty, abs(cand - finger), cand))
+
+        return min(candidates_with_penalty)[2]
 
     def generate(
         self,
@@ -347,9 +436,6 @@ class Hand:
         initial_depth = self.depth
         original_x = None
 
-        if start_measure == 1:
-            start_measure = 0
-
         if self.LR == "left":
             # Reuse right-hand geometry/cost logic by mirroring x-coordinates for LH.
             original_x = [anote.x for anote in self.noteseq]
@@ -358,16 +444,6 @@ class Hand:
 
         self.fingerseq = []
         try:
-            def preset_finger(value: int | str) -> int:
-                """Normalize pre-annotated fingers to 1..5, or 0 when absent/invalid."""
-                if isinstance(value, str):
-                    text = value.strip()
-                    if not text.lstrip("+-").isdigit():
-                        return 0
-                    value = int(text)
-                finger = abs(int(value))
-                return finger if 1 <= finger <= 5 else 0
-
             self.finger_positions = list(self.frest)
             self._has_position_state = False
             start_finger = 0
@@ -398,7 +474,8 @@ class Hand:
                     # Near the tail, disable autodepth but keep manual depth if explicitly set.
                     if self.autodepth:
                         self.autodepth = False
-                        self.depth = 9
+                        # Avoid a 9-note search over repeated padding for short scores.
+                        self.depth = max(3, min(9, n_total - i))
 
                 # Build a fixed-size look-ahead window (tail padded with last note).
                 ninenotes = list(self.noteseq[i : i + 9])
@@ -407,7 +484,17 @@ class Hand:
                 if not ninenotes:
                     break
 
-                anchored_finger = preset_finger(an.fingering)
+                anchored_finger = 0
+                raw_finger = an.fingering
+                if isinstance(raw_finger, str):
+                    text = raw_finger.strip()
+                    if text.lstrip("+-").isdigit():
+                        raw_finger = int(text)
+                if isinstance(raw_finger, int):
+                    normalized = abs(raw_finger)
+                    if 1 <= normalized <= 5:
+                        anchored_finger = normalized
+
                 if anchored_finger:
                     # Preserve existing annotation and resume optimization from this anchor.
                     an.fingering = anchored_finger
@@ -437,6 +524,9 @@ class Hand:
                     best_finger = out[0]
                     start_finger = out[1] if len(out) > 1 else out[0]
 
+                best_finger = self._enforce_chord_group_consistency(i, best_finger)
+                # Keep solver state in sync when chord consistency overrides the chosen finger.
+                out[0] = best_finger
                 an.fingering = best_finger
                 self.set_fingers_positions(out, ninenotes, 0)
                 self.fingerseq.append(list(self.finger_positions))

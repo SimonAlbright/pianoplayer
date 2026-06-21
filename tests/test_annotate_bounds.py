@@ -8,6 +8,7 @@ from pianoplayer.musicxml_io import (
     annotate_part_with_fingering,
     noteseq_from_part,
     parse_musicxml,
+    strip_layout_breaks,
 )
 from pianoplayer.scorereader import reader
 
@@ -145,3 +146,120 @@ def test_noteseq_from_part_uses_configurable_chord_stagger() -> None:
     assert len(seq_zero) == 3
     assert seq_default[0].time < seq_default[1].time < seq_default[2].time
     assert seq_zero[0].time == seq_zero[1].time == seq_zero[2].time == 10.0
+
+
+def test_annotate_applies_hand_color_to_note_and_fingering() -> None:
+    score = parse_musicxml("scores/test_scales.xml")
+    part = score.parts[0]
+    seq = reader(score, beam=0)
+    assert seq
+    seq[0].fingering = 3
+
+    annotate_part_with_fingering(part, seq[:1], lyrics=False, hand_color="#112233")
+
+    first_note = part.events[0].notes[0]
+    fingering = first_note.find("./notations/technical/fingering")
+    assert fingering is not None
+    assert first_note.attrib.get("color") == "#112233"
+    assert fingering.attrib.get("color") == "#112233"
+
+
+def test_annotate_accepts_named_hand_color() -> None:
+    score = parse_musicxml("scores/test_scales.xml")
+    part = score.parts[0]
+    seq = reader(score, beam=0)
+    assert seq
+    seq[0].fingering = 2
+
+    annotate_part_with_fingering(part, seq[:1], lyrics=False, hand_color="royalblue")
+
+    first_note = part.events[0].notes[0]
+    fingering = first_note.find("./notations/technical/fingering")
+    assert fingering is not None
+    assert first_note.attrib.get("color") == "royalblue"
+    assert fingering.attrib.get("color") == "royalblue"
+
+
+def test_annotate_colorize_by_cost_applies_gradient() -> None:
+    score = parse_musicxml("scores/test_scales.xml")
+    part = score.parts[0]
+    seq = reader(score, beam=0)
+    assert len(seq) >= 2
+
+    seq[0].fingering = 2
+    seq[1].fingering = 3
+    seq[0].cost = 0.1
+    seq[1].cost = 9.0
+
+    annotate_part_with_fingering(part, seq[:2], lyrics=False, colorize_by_cost=True)
+
+    first = part.events[0].notes[0]
+    second = part.events[1].notes[0]
+    assert first.attrib.get("color")
+    assert second.attrib.get("color")
+    assert first.attrib.get("color") != second.attrib.get("color")
+
+
+def test_strip_layout_breaks_removes_page_break_only(tmp_path) -> None:
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list>
+    <score-part id="P1"><part-name>Piano</part-name></score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <print new-page="yes" new-system="yes"/>
+      <attributes><divisions>1</divisions></attributes>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note>
+    </measure>
+  </part>
+</score-partwise>
+"""
+    path = tmp_path / "layout_breaks.xml"
+    path.write_text(xml, encoding="utf-8")
+    score = parse_musicxml(str(path))
+    strip_layout_breaks(score)
+    out = tmp_path / "layout_breaks_out.xml"
+    score.write(str(out))
+
+    root = ET.parse(out).getroot()
+    assert not root.findall(".//print[@new-page='yes']")
+    assert root.findall(".//print[@new-system='yes']")
+
+
+def test_noteseq_marks_same_onset_same_staff_as_synthetic_chord() -> None:
+    note_a = ET.Element("note")
+    ET.SubElement(note_a, "staff").text = "1"
+    note_b = ET.Element("note")
+    ET.SubElement(note_b, "staff").text = "1"
+
+    part = PartInfo(
+        part_id="P1",
+        events=[
+            EventInfo(
+                kind="note",
+                measure=1,
+                offset=4.0,
+                duration=1.0,
+                tie_types=set(),
+                notes=[note_a],
+                pitches=[PitchInfo(name="E", octave=4, midi=64)],
+            ),
+            EventInfo(
+                kind="note",
+                measure=1,
+                offset=4.0,
+                duration=1.0,
+                tie_types=set(),
+                notes=[note_b],
+                pitches=[PitchInfo(name="B", octave=4, midi=71)],
+            ),
+        ],
+    )
+
+    seq = noteseq_from_part(part, chord_note_stagger_s=0.05)
+    assert len(seq) == 2
+    assert seq[0].isChord and seq[1].isChord
+    assert seq[0].chordID == seq[1].chordID
+    assert seq[0].NinChord == 2 and seq[1].NinChord == 2
+    assert seq[0].time < seq[1].time

@@ -17,6 +17,7 @@ from pianoplayer.musicxml_io import (
     annotate_part_with_fingering,
     clear_part_fingering,
     parse_musicxml,
+    strip_layout_breaks,
 )
 from pianoplayer.scorereader import reader, reader_PIG, reader_pretty_midi
 
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 _MIN_MANUAL_DEPTH = 5
 _MAX_MANUAL_DEPTH = 9
 _HAND_SIZES = {"XXS", "XS", "S", "M", "L", "XL", "XXL"}
+_TEXT_INPUT_EXTENSIONS = {".mid", ".midi", ".txt"}
 
 
 class _ProgressReporter:
@@ -156,12 +158,20 @@ def run_annotate(
     quiet=False,
     musescore=False,
     below_beam=False,
+    colorize_hands=False,
+    colorize_by_cost=False,
+    colorize_by_fingering=False,
+    cost_colormap="traffic",
+    fingering_colors="",
+    rh_color="#d62828",
+    lh_color="#1d4ed8",
     with_vedo=0,
     sound_off=False,
     left_only=False,
     right_only=False,
     hand_size="M",
     chord_note_stagger_s=0.05,
+    cost_path=None,
 ):
     """Programmatic entry point mirroring CLI options."""
     options = AnnotateOptions(
@@ -178,12 +188,20 @@ def run_annotate(
         quiet=quiet,
         musescore=musescore,
         below_beam=below_beam,
+        colorize_hands=colorize_hands,
+        colorize_by_cost=colorize_by_cost,
+        colorize_by_fingering=colorize_by_fingering,
+        cost_colormap=cost_colormap,
+        fingering_colors=fingering_colors,
+        rh_color=rh_color,
+        lh_color=lh_color,
         with_vedo=with_vedo,
         sound_off=sound_off,
         left_only=left_only,
         right_only=right_only,
         hand_size=hand_size,
         chord_note_stagger_s=chord_note_stagger_s,
+        cost_path=cost_path,
     )
     options_ns = options.to_namespace()
     # GUI/programmatic callers expect progress unless quiet mode is requested.
@@ -200,17 +218,28 @@ def _as_namespace(args: Any) -> SimpleNamespace:
     return AnnotateOptions.from_namespace(args).to_namespace()
 
 
-def _resolve_input_filename(filename: str) -> str:
-    """Resolve score path, trying local `scores/` when a bare filename is passed."""
-    if os.path.exists(filename):
-        return filename
+def default_output_filename(filename: str) -> str:
+    """Return the supported default output name for an input format."""
+    ext = os.path.splitext(str(filename).lower())[1]
+    return "output.txt" if ext in _TEXT_INPUT_EXTENSIONS else "output.xml"
 
-    candidate = os.path.join("scores", filename)
-    if os.path.exists(candidate):
-        logger.info("Resolved input file '%s' to '%s'.", filename, candidate)
-        return candidate
 
-    raise FileNotFoundError(f"Input score not found: {filename}")
+def _normalize_output_filename(args: SimpleNamespace) -> None:
+    """Keep MIDI/PIG processing on its supported tabular output path."""
+    if args.outputfile is None:
+        return
+    input_ext = os.path.splitext(str(args.filename).lower())[1]
+    output_ext = os.path.splitext(str(args.outputfile).lower())[1]
+    if input_ext not in _TEXT_INPUT_EXTENSIONS:
+        return
+    if str(args.outputfile) == "output.xml":
+        args.outputfile = "output.txt"
+        return
+    if output_ext != ".txt":
+        raise ValueError(
+            "MIDI and PIG inputs currently require a .txt output file; "
+            "use '-o output.txt'."
+        )
 
 
 def _run_external(cmd: list[str], context: str) -> None:
@@ -223,79 +252,73 @@ def _run_external(cmd: list[str], context: str) -> None:
         raise ExternalToolError(f"External command failed for {context}: {' '.join(cmd)}") from exc
 
 
-def _normalize_single_part_parts(args: SimpleNamespace, score_info: Any) -> None:
-    """Map selected-hand part to 0 when the score has only one part."""
-    parts = getattr(score_info, "parts", None)
-    if parts is None or len(parts) != 1:
-        return
-
-    if args.rpart != 0:
-        logger.info("Single-part score detected: remapping right-hand part %s -> 0", args.rpart)
-        args.rpart = 0
-    if args.lpart != 0:
-        logger.info("Single-part score detected: remapping left-hand part %s -> 0", args.lpart)
-        args.lpart = 0
-
-
-def _part_staffs(score_info: Any, part: int) -> set[int]:
-    """Collect declared MusicXML staff numbers for one part index."""
-    parts = getattr(score_info, "parts", None)
-    if parts is None or part < 0 or part >= len(parts):
-        return set()
-    staffs: set[int] = set()
-    for evt in parts[part].events:
-        for note_el in evt.notes:
-            txt = note_el.findtext("staff", "").strip()
-            if txt.isdigit():
-                staffs.add(int(txt))
-    return staffs
-
-
-def _resolve_staff_target(
-    args: SimpleNamespace, score_info: Any, *, is_right: bool
-) -> int | None:
-    """Resolve target staff for one hand.
-
-    Priority:
-    1. explicit `--rstaff/--lstaff`,
-    2. single-part auto defaults (RH->staff 1, LH->staff 2 when available),
-    3. `None` for part-based routing.
-    """
-    explicit = int(args.rstaff if is_right else args.lstaff)
-    if explicit > 0:
-        return explicit
-
-    parts = getattr(score_info, "parts", None)
-    if parts is None or len(parts) != 1:
-        return None
-
-    staffs = sorted(_part_staffs(score_info, 0))
-    if not staffs:
-        return None
-
-    if is_right:
-        if 1 in staffs:
-            return 1
-        return staffs[0]
-
-    if 2 in staffs:
-        return 2
-    if len(staffs) > 1:
-        return staffs[-1]
-    return staffs[0]
-
-
 def _resolve_musicxml_routing(args: SimpleNamespace, score_info: Any) -> None:
     """Compute and store resolved part/staff routing for RH/LH."""
     parts = getattr(score_info, "parts", None) or []
     auto_routing = bool(getattr(args, "auto_routing", True))
+    single_part_staffs: list[int] = []
     if auto_routing:
-        _normalize_single_part_parts(args, score_info)
+        if len(parts) == 1:
+            if args.rpart != 0:
+                logger.debug(
+                    "Single-part score detected: remapping right-hand part %s -> 0",
+                    args.rpart,
+                )
+                args.rpart = 0
+            if args.lpart != 0:
+                logger.debug(
+                    "Single-part score detected: remapping left-hand part %s -> 0",
+                    args.lpart,
+                )
+                args.lpart = 0
+
+            staff_values: set[int] = set()
+            for evt in parts[0].events:
+                for note_el in evt.notes:
+                    for child in note_el:
+                        tag = child.tag
+                        local = tag.rsplit("}", 1)[-1] if tag.startswith("{") else tag
+                        if local == "staff":
+                            raw_staff = (child.text or "").strip()
+                            if raw_staff.isdigit():
+                                staff_values.add(int(raw_staff))
+                            break
+            if staff_values:
+                single_part_staffs = sorted(staff_values)
+
+            if not args.left_only and not args.right_only and len(single_part_staffs) <= 1:
+                # Annotating both hands would process and overwrite the same stream.
+                args.right_only = True
+                logger.info("Single-staff score detected; auto-routing to right hand only.")
+
         if len(parts) > 1:
             args.rpart = max(0, min(int(args.rpart), len(parts) - 1))
             args.lpart = max(0, min(int(args.lpart), len(parts) - 1))
-        args._resolved_rstaff = _resolve_staff_target(args, score_info, is_right=True)
-        args._resolved_lstaff = _resolve_staff_target(args, score_info, is_right=False)
+
+        explicit_rstaff = int(args.rstaff)
+        explicit_lstaff = int(args.lstaff)
+
+        if explicit_rstaff > 0:
+            args._resolved_rstaff = explicit_rstaff
+        elif single_part_staffs:
+            if 1 in single_part_staffs:
+                args._resolved_rstaff = 1
+            else:
+                args._resolved_rstaff = single_part_staffs[0]
+        else:
+            args._resolved_rstaff = None
+
+        if explicit_lstaff > 0:
+            args._resolved_lstaff = explicit_lstaff
+        elif single_part_staffs:
+            if 2 in single_part_staffs:
+                args._resolved_lstaff = 2
+            elif len(single_part_staffs) > 1:
+                args._resolved_lstaff = single_part_staffs[-1]
+            else:
+                args._resolved_lstaff = single_part_staffs[0]
+        else:
+            args._resolved_lstaff = None
     else:
         if parts:
             args.rpart = max(0, min(int(args.rpart), len(parts) - 1))
@@ -303,7 +326,7 @@ def _resolve_musicxml_routing(args: SimpleNamespace, score_info: Any) -> None:
         args._resolved_rstaff = int(args.rstaff) if int(args.rstaff) > 0 else None
         args._resolved_lstaff = int(args.lstaff) if int(args.lstaff) > 0 else None
 
-    logger.info(
+    logger.debug(
         "Resolved routing (%s): RH part %s%s | LH part %s%s",
         "auto" if auto_routing else "manual",
         args.rpart,
@@ -330,12 +353,22 @@ def load_note_sequences(args):
     lh_noteseq = None
 
     try:
-        args.filename = _resolve_input_filename(str(args.filename))
+        input_filename = str(args.filename)
+        if os.path.exists(input_filename):
+            args.filename = input_filename
+        else:
+            candidate = os.path.join("scores", input_filename)
+            if os.path.exists(candidate):
+                logger.debug("Resolved input file '%s' to '%s'.", input_filename, candidate)
+                args.filename = candidate
+            else:
+                raise FileNotFoundError(f"Input score not found: {input_filename}")
+
         xmlfn = args.filename
         ext = os.path.splitext(str(args.filename).lower())[1]
         # Dispatch by input format. MusicXML-like inputs also expose `score_info`.
         if ext in {".mscz", ".mscx"}:
-            xmlfn = str(args.filename).replace(".mscz", ".xml").replace(".mscx", ".xml")
+            xmlfn = os.path.splitext(str(args.filename))[0] + ".xml"
             logger.info("Converting MuseScore file %s -> %s", args.filename, xmlfn)
             _run_external(["musescore", "-f", args.filename, "-o", xmlfn], "MuseScore conversion")
             score_info = parse_musicxml(xmlfn)
@@ -380,6 +413,31 @@ def load_note_sequences(args):
                 ) from exc
 
             pm = pretty_midi.PrettyMIDI(args.filename)
+
+            if not pm.instruments:
+                raise ValueError("MIDI file contains no instrument tracks.")
+
+            instrument_count = len(pm.instruments)
+            if bool(getattr(args, "auto_routing", True)):
+                args.rpart = max(0, min(int(args.rpart), instrument_count - 1))
+                args.lpart = max(0, min(int(args.lpart), instrument_count - 1))
+                if instrument_count == 1 and not args.left_only and not args.right_only:
+                    args.right_only = True
+                    logger.info(
+                        "Single-instrument MIDI detected; auto-routing to right hand only."
+                    )
+            else:
+                selected_instruments = []
+                if not args.left_only:
+                    selected_instruments.append(("right", args.rpart))
+                if not args.right_only:
+                    selected_instruments.append(("left", args.lpart))
+                for label, index in selected_instruments:
+                    if int(index) < 0 or int(index) >= instrument_count:
+                        raise ValueError(
+                            f"Requested {label}-hand MIDI instrument {index}, "
+                            f"but file contains {instrument_count} instrument(s)."
+                        )
 
             if not args.left_only:
                 rh_noteseq = reader_pretty_midi(
@@ -435,6 +493,9 @@ def load_note_sequences(args):
 def generate_hands(args, rh_noteseq, lh_noteseq, progress: _ProgressReporter | None = None):
     """Create and run right/left hand optimizers according to CLI options."""
     args = _as_namespace(args)
+
+    if args.left_only and args.right_only:
+        raise ValueError("--left-only and --right-only cannot be used together")
 
     hand_size = str(getattr(args, "hand_size", "M")).upper()
     if hand_size not in _HAND_SIZES:
@@ -497,12 +558,20 @@ def write_annotated_output(args, score_info, rh, lh):
     if args.outputfile is None:
         return
 
-    if os.path.splitext(args.outputfile)[1] == ".txt":
+    colorize_hands = bool(getattr(args, "colorize_hands", False))
+    colorize_by_cost = bool(getattr(args, "colorize_by_cost", False))
+    colorize_by_fingering = bool(getattr(args, "colorize_by_fingering", False))
+    cost_colormap = str(getattr(args, "cost_colormap", "traffic") or "traffic")
+    fingering_colors = str(getattr(args, "fingering_colors", "") or "")
+    rh_color = str(getattr(args, "rh_color", "#d62828"))
+    lh_color = str(getattr(args, "lh_color", "#1d4ed8"))
+
+    if os.path.splitext(args.outputfile)[1].lower() == ".txt":
         # Legacy PIG writer path.
         pig_rows = []
 
-        def append_pig_rows(hand, *, is_right: bool) -> None:
-            for note in hand.noteseq:
+        if not args.left_only and rh is not None:
+            for note in rh.noteseq:
                 pig_rows.append(
                     (
                         f"{note.time:.4f}",
@@ -510,17 +579,27 @@ def write_annotated_output(args, score_info, rh, lh):
                         note.pitch,
                         str(None),
                         str(None),
-                        "0" if is_right else "1",
-                        note.fingering if is_right else -note.fingering,
+                        "0",
+                        note.fingering,
                         note.cost,
                         note.noteID,
                     )
                 )
-
-        if not args.left_only and rh is not None:
-            append_pig_rows(rh, is_right=True)
         if not args.right_only and lh is not None:
-            append_pig_rows(lh, is_right=False)
+            for note in lh.noteseq:
+                pig_rows.append(
+                    (
+                        f"{note.time:.4f}",
+                        f"{note.time + note.duration:.4f}",
+                        note.pitch,
+                        str(None),
+                        str(None),
+                        "1",
+                        -note.fingering,
+                        note.cost,
+                        note.noteID,
+                    )
+                )
 
         with open(args.outputfile, "wt", encoding="utf-8") as out_file:
             writer = csv.writer(out_file, delimiter="\t")
@@ -573,6 +652,11 @@ def write_annotated_output(args, score_info, rh, lh):
                 lyrics=rh.lyrics,
                 skip_chords_with=4,
                 target_staff=getattr(args, "_resolved_rstaff", None),
+                hand_color=(rh_color if colorize_hands else None),
+                colorize_by_cost=colorize_by_cost,
+                colorize_by_fingering=colorize_by_fingering,
+                cost_colormap=cost_colormap,
+                fingering_colors=fingering_colors,
             )
 
     if not args.right_only and lh is not None:
@@ -589,8 +673,14 @@ def write_annotated_output(args, score_info, rh, lh):
                 lyrics=lh.lyrics,
                 skip_chords_with=4,
                 target_staff=getattr(args, "_resolved_lstaff", None),
+                hand_color=(lh_color if colorize_hands else None),
+                colorize_by_cost=colorize_by_cost,
+                colorize_by_fingering=colorize_by_fingering,
+                cost_colormap=cost_colormap,
+                fingering_colors=fingering_colors,
             )
 
+    strip_layout_breaks(score_info)
     score_info.write(args.outputfile)
     logger.debug("Wrote annotated score to %s", args.outputfile)
 
@@ -653,51 +743,16 @@ def annotate(args: AnnotateOptions | SimpleNamespace | Any):
     """End-to-end annotation pipeline used by CLI and GUI entry points."""
     t_start = time.perf_counter()
 
-    def is_anchored_finger(value: Any) -> bool:
-        if isinstance(value, str):
-            text = value.strip()
-            if not text.lstrip("+-").isdigit():
-                return False
-            value = int(text)
-        if not isinstance(value, int):
-            return False
-        return 1 <= abs(value) <= 5
-
-    def hand_status(is_right: bool, score_info) -> str:
-        hand_name = "RH" if is_right else "LH"
-        only_flag = args.left_only if is_right else args.right_only
-        if only_flag:
-            return f"{hand_name}=disabled"
-        part = args.rpart if is_right else args.lpart
-        staff = getattr(args, "_resolved_rstaff" if is_right else "_resolved_lstaff", None)
-        if score_info is not None and len(score_info.parts) <= part:
-            return f"{hand_name}=skipped(part {part} out of range)"
-        if staff:
-            return f"{hand_name}=ok(part {part}, staff {staff})"
-        return f"{hand_name}=ok(part {part})"
-
-    def hand_route(is_right: bool) -> str:
-        part = args.rpart if is_right else args.lpart
-        staff = getattr(args, "_resolved_rstaff" if is_right else "_resolved_lstaff", None)
-        if staff:
-            return f"part {part}, staff {staff}"
-        return f"part {part}"
-
-    def styled_status(status: str) -> str:
-        if status.startswith("ok"):
-            return f"[green]{status}[/green]"
-        if status.startswith("skipped"):
-            return f"[yellow]{status}[/yellow]"
-        if status.startswith("disabled"):
-            return f"[dim]{status}[/dim]"
-        return status
-
     # Normalize caller input and execution flags.
     show_progress = bool(getattr(args, "_show_progress", False))
     if isinstance(args, AnnotateOptions):
         args = args.to_namespace()
     else:
         args = AnnotateOptions.from_namespace(args).to_namespace()
+
+    if args.left_only and args.right_only:
+        raise ValueError("--left-only and --right-only cannot be used together")
+    _normalize_output_filename(args)
 
     # Clamp manual search depth to the supported solver range.
     depth = int(getattr(args, "depth", 0))
@@ -740,13 +795,27 @@ def annotate(args: AnnotateOptions | SimpleNamespace | Any):
         xmlfn, score_info, rh_noteseq, lh_noteseq = load_note_sequences(args)
 
         # Report existing score annotations that become hard anchors for optimization.
-        rh_anchors = sum(
-            1 for n in (rh_noteseq or []) if is_anchored_finger(getattr(n, "fingering", 0))
-        )
-        lh_anchors = sum(
-            1 for n in (lh_noteseq or []) if is_anchored_finger(getattr(n, "fingering", 0))
-        )
-        if rh_anchors + lh_anchors:
+        rh_anchors = 0
+        for note in rh_noteseq or []:
+            finger = getattr(note, "fingering", 0)
+            if isinstance(finger, str):
+                text = finger.strip()
+                if text.lstrip("+-").isdigit():
+                    finger = int(text)
+            if isinstance(finger, int) and 1 <= abs(finger) <= 5:
+                rh_anchors += 1
+
+        lh_anchors = 0
+        for note in lh_noteseq or []:
+            finger = getattr(note, "fingering", 0)
+            if isinstance(finger, str):
+                text = finger.strip()
+                if text.lstrip("+-").isdigit():
+                    finger = int(text)
+            if isinstance(finger, int) and 1 <= abs(finger) <= 5:
+                lh_anchors += 1
+        anchor_log_key = "_anchor_detection_logged"
+        if rh_anchors + lh_anchors and not bool(getattr(args, anchor_log_key, False)):
             parts = []
             if not args.left_only:
                 parts.append(f"RH={rh_anchors}")
@@ -756,10 +825,72 @@ def annotate(args: AnnotateOptions | SimpleNamespace | Any):
                 "Detected pre-annotated fingers (%s). They will be preserved and used as anchors.",
                 ", ".join(parts),
             )
+            setattr(args, anchor_log_key, True)
         progress.parse_done()
         rh, lh = generate_hands(args, rh_noteseq, lh_noteseq, progress=progress)
         progress.write_start()
         write_annotated_output(args, score_info, rh, lh)
+        cost_path = getattr(args, "cost_path", None)
+        if cost_path:
+            try:
+                rows: list[tuple[str, int, float, float, float, int, float, int, int]] = []
+                for hand_name, hand in (("RH", rh), ("LH", lh)):
+                    if hand is None or getattr(hand, "noteseq", None) is None:
+                        continue
+
+                    for idx, note in enumerate(hand.noteseq):
+                        raw_cost = getattr(note, "cost", None)
+                        try:
+                            cost = float(raw_cost)
+                        except (TypeError, ValueError):
+                            continue
+
+                        pitch = getattr(note, "pitch", 0)
+                        try:
+                            pitch_value = float(pitch)
+                        except (TypeError, ValueError):
+                            pitch_value = 0.0
+
+                        fingering = getattr(note, "fingering", 0)
+                        try:
+                            fingering_value = int(fingering)
+                        except (TypeError, ValueError):
+                            fingering_value = 0
+
+                        rows.append(
+                            (
+                                hand_name,
+                                idx,
+                                float(getattr(note, "time", 0.0)),
+                                float(getattr(note, "duration", 0.0)),
+                                pitch_value,
+                                fingering_value,
+                                cost,
+                                int(getattr(note, "measure", 0)),
+                                int(getattr(note, "staff", 0)),
+                            )
+                        )
+
+                rows.sort(key=lambda row: (row[0], row[1], row[2]))
+                with open(str(cost_path), "w", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(
+                        [
+                            "hand",
+                            "index",
+                            "time",
+                            "duration",
+                            "pitch",
+                            "fingering",
+                            "cost",
+                            "measure",
+                            "staff",
+                        ]
+                    )
+                    for row in rows:
+                        writer.writerow(row)
+            except Exception as exc:
+                logger.warning("Unable to write cost profile to %s: %s", cost_path, exc)
         progress.write_done()
 
     # Optional 3D playback happens after output generation.
@@ -772,8 +903,75 @@ def annotate(args: AnnotateOptions | SimpleNamespace | Any):
     depth_info = "auto" if int(getattr(args, "depth", 0)) == 0 else str(args.depth)
     elapsed_s = time.perf_counter() - t_start
 
-    rh_status = hand_status(is_right=True, score_info=score_info).replace("RH=", "")
-    lh_status = hand_status(is_right=False, score_info=score_info).replace("LH=", "")
+    rh_status = "disabled" if args.left_only else (
+        f"skipped(part {args.rpart} out of range)"
+        if (score_info is not None and len(score_info.parts) <= args.rpart)
+        else (
+            f"ok(part {args.rpart}, staff {getattr(args, '_resolved_rstaff', None)})"
+            if getattr(args, "_resolved_rstaff", None)
+            else f"ok(part {args.rpart})"
+        )
+    )
+    lh_status = "disabled" if args.right_only else (
+        f"skipped(part {args.lpart} out of range)"
+        if (score_info is not None and len(score_info.parts) <= args.lpart)
+        else (
+            f"ok(part {args.lpart}, staff {getattr(args, '_resolved_lstaff', None)})"
+            if getattr(args, "_resolved_lstaff", None)
+            else f"ok(part {args.lpart})"
+        )
+    )
+    rh_route = (
+        f"part {args.rpart}, staff {getattr(args, '_resolved_rstaff', None)}"
+        if getattr(args, "_resolved_rstaff", None)
+        else f"part {args.rpart}"
+    )
+    lh_route = (
+        f"part {args.lpart}, staff {getattr(args, '_resolved_lstaff', None)}"
+        if getattr(args, "_resolved_lstaff", None)
+        else f"part {args.lpart}"
+    )
+    rh_status_colored = (
+        f"[green]{rh_status}[/green]"
+        if rh_status.startswith("ok")
+        else (
+            f"[yellow]{rh_status}[/yellow]"
+            if rh_status.startswith("skipped")
+            else f"[dim]{rh_status}[/dim]"
+        )
+    )
+    lh_status_colored = (
+        f"[green]{lh_status}[/green]"
+        if lh_status.startswith("ok")
+        else (
+            f"[yellow]{lh_status}[/yellow]"
+            if lh_status.startswith("skipped")
+            else f"[dim]{lh_status}[/dim]"
+        )
+    )
+    colorize_by_cost = bool(getattr(args, "colorize_by_cost", False))
+    colorize_by_fingering = bool(getattr(args, "colorize_by_fingering", False))
+
+    cost_values: list[float] = []
+    for hand in (rh, lh):
+        if hand is None:
+            continue
+        for note in getattr(hand, "noteseq", []) or []:
+            raw = getattr(note, "cost", None)
+            try:
+                val = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if val >= 0:
+                cost_values.append(val)
+    if cost_values:
+        cost_range_info = (
+            f"{min(cost_values):.2f} ... {max(cost_values):.2f}"
+        )
+    else:
+        cost_range_info = "n.a."
+    cost_mode_info = "ON" if colorize_by_cost else "off"
+    fingering_mode_info = "ON" if colorize_by_fingering else "off"
 
     try:
         from rich.console import Console
@@ -787,15 +985,16 @@ def annotate(args: AnnotateOptions | SimpleNamespace | Any):
         table.add_row("Output", str(args.outputfile))
         table.add_row("Depth", depth_info)
         table.add_row("Parts", parts_info)
-        table.add_row("RH Route", hand_route(is_right=True))
-        table.add_row("LH Route", hand_route(is_right=False))
-        table.add_row("Elapsed", f"{elapsed_s:.2f} s")
-        table.add_row("Right Hand", f"{styled_status(rh_status)} | notes={rh_count}")
-        table.add_row("Left Hand", f"{styled_status(lh_status)} | notes={lh_count}")
+        table.add_row("Right Hand", f"{rh_status_colored} | notes={rh_count}")
+        table.add_row("Left  Hand", f"{lh_status_colored} | notes={lh_count}")
+        table.add_row("Cost Range", cost_range_info)
+        table.add_row("Cost Colors", cost_mode_info)
+        table.add_row("Finger Colors", fingering_mode_info)
+        table.add_row("Elapsed Time", f"{elapsed_s:.2f} seconds")
         Console().print(table)
 
         # Show a final "next command" hint when output is not auto-opened.
-        if not args.musescore:
+        if args.outputfile is not None and not args.musescore:
             hint = f"visualize annotated score with command: musescore '{args.outputfile}'"
             panel = Panel(
                 f"[bold]💡 {hint}[/bold]",
@@ -808,19 +1007,23 @@ def annotate(args: AnnotateOptions | SimpleNamespace | Any):
         logger.info(
             (
                 "Summary | input=%s | output=%s | depth=%s | parts=%s | elapsed=%.2fs "
-                "| RH-route=%s | LH-route=%s | RH=%s(notes=%s) | LH=%s(notes=%s)"
+                "| RH-route=%s | LH-route=%s | cost-range=%s | cost-colors=%s | finger-colors=%s "
+                "| RH=%s(notes=%s) | LH=%s(notes=%s)"
             ),
             args.filename,
             args.outputfile,
             depth_info,
             parts_info,
             elapsed_s,
-            hand_route(is_right=True),
-            hand_route(is_right=False),
+            rh_route,
+            lh_route,
+            cost_range_info,
+            cost_mode_info,
+            fingering_mode_info,
             rh_status,
             rh_count,
             lh_status,
             lh_count,
         )
-        if not args.musescore:
+        if args.outputfile is not None and not args.musescore:
             logger.info("visualize annotated score with command: musescore '%s'", args.outputfile)

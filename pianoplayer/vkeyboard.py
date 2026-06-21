@@ -24,6 +24,12 @@ console = Console()
 
 def note_name(n):
     """Return a normalized pitch name used by the keyboard key map."""
+    pitch = getattr(n, "pitch", None)
+    if isinstance(pitch, (int, float)) and pitch > 0:
+        midi = int(round(pitch))
+        names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+        return names[midi % 12] + str((midi // 12) - 1)
+
     a = n.name + str(n.octave)
     if "--" in a:
         b = a.replace("B--", "A")
@@ -268,7 +274,7 @@ class VirtualKeyboard:
 
         state = {"abort": False}
 
-        def _get_key(evt) -> str:
+        def _on_key(evt):
             key = (
                 getattr(evt, "keypress", "")
                 or getattr(evt, "keyPressed", "")
@@ -278,10 +284,8 @@ class VirtualKeyboard:
             if not key and interactor is not None:
                 with contextlib.suppress(Exception):
                     key = interactor.GetKeySym() or ""
-            return str(key).strip().lower()
+            key = str(key).strip().lower()
 
-        def _on_key(evt):
-            key = _get_key(evt)
             if key in {"escape", "esc", "q"}:
                 state["abort"] = True
                 try:

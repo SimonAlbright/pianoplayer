@@ -262,6 +262,82 @@ uvicorn webapi.app:app --host 127.0.0.1 --port 8000
     .field { display: grid; gap: 0.3rem; }
     .field.full { grid-column: 1 / -1; }
     .field.hidden { display: none; }
+    .field.muted { opacity: 0.5; }
+    .muted { opacity: 0.5; }
+
+    .radio-group {
+      display: flex;
+      gap: 0.9rem;
+      align-items: center;
+      padding-top: 0.25rem;
+    }
+
+    .radio-group label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-weight: 600;
+      color: #334155;
+      white-space: nowrap;
+    }
+
+    .radio-group input[type="radio"],
+    .radio-group input[type="checkbox"] {
+      width: auto;
+      margin: 0;
+      padding: 0;
+    }
+
+    .colorize-inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      margin-left: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .colorize-inline .color-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    .colorize-inline .color-chip label {
+      font-weight: 700;
+      color: #334155;
+      white-space: nowrap;
+    }
+
+    .colorize-inline .color-chip select {
+      width: 8.2rem;
+      padding: 0.34rem 0.5rem;
+      font-size: 0.9rem;
+    }
+    .colorize-inline .color-chip input[type="color"] {
+      width: 2.35rem;
+      min-width: 2.35rem;
+      height: 2rem;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 0.12rem;
+      background: #ffffff;
+      cursor: pointer;
+    }
+    .colorize-inline .fingers-palette {
+      gap: 0.45rem;
+      flex-wrap: wrap;
+    }
+    .colorize-inline .finger-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.22rem;
+    }
+    .colorize-inline .finger-chip .finger-label {
+      font-weight: 800;
+      color: #334155;
+      min-width: 0.7rem;
+      text-align: center;
+    }
 
     label {
       font-size: 0.82rem;
@@ -411,7 +487,7 @@ uvicorn webapi.app:app --host 127.0.0.1 --port 8000
       <!-- <span class="kicker">No Setup Needed</span> -->
       <div class="hero-image">
         <img
-          src="/images/banner.png"
+          src="images/banner.png"
           alt="PianoPlayer banner"
         />
       </div>
@@ -427,7 +503,7 @@ uvicorn webapi.app:app --host 127.0.0.1 --port 8000
 
     <section class="card">
       <p class="subtitle"><span class="spark">✦</span>
-        Upload a score and download the annotated MusicXML output
+        Upload a score and download the annotated output
         <span class="spark">✦</span></p>
       <form id="annotate-form">
         <div class="io-row">
@@ -470,7 +546,7 @@ uvicorn webapi.app:app --host 127.0.0.1 --port 8000
             </div>
 
             <div class="field">
-              <label for="n_measures">Stop at Measure</label>
+              <label for="n_measures">Number of Measures</label>
               <input id="n_measures" name="n_measures" type="number" min="1" value="1000" />
             </div>
           </div>
@@ -479,15 +555,40 @@ uvicorn webapi.app:app --host 127.0.0.1 --port 8000
         <div id="advanced-panel" class="panel" role="tabpanel">
           <div class="adv-groups">
             <section class="adv-group">
+              <p class="adv-title">Routing</p>
+              <div class="grid">
+                <div class="field full">
+                  <label for="auto_routing">Mode for assigning hands to parts/staves</label>
+                  <select id="auto_routing" name="auto_routing">
+                    <option value="true" selected>Auto (recommended)</option>
+                    <option value="false">Manual</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="lpart">Left Part number</label>
+                  <input id="lpart" name="lpart" type="number" min="0" value="1" />
+                </div>
+                <div class="field">
+                  <label for="rpart">Right Part number</label>
+                  <input id="rpart" name="rpart" type="number" min="0" value="0" />
+                </div>
+                <div class="field">
+                  <label for="lstaff">Left Staff number (0=auto)</label>
+                  <input id="lstaff" name="lstaff" type="number" min="0" value="0" />
+                </div>
+                <div class="field">
+                  <label for="rstaff">Right Staff number (0=auto)</label>
+                  <input id="rstaff" name="rstaff" type="number" min="0" value="0" />
+                </div>
+              </div>
+            </section>
+
+            <section class="adv-group">
               <p class="adv-title">Solver</p>
               <div class="grid">
                 <div class="field">
                   <label for="depth">Depth of search (0=auto)</label>
                   <input id="depth" name="depth" type="number" min="0" max="9" value="0" />
-                </div>
-                <div class="field">
-                  <label for="chord_note_stagger_s">Chord Stagger (seconds)</label>
-                  <input id="chord_note_stagger_s" name="chord_note_stagger_s" type="number" step="0.01" min="0" value="0.05" />
                 </div>
               </div>
             </section>
@@ -496,43 +597,89 @@ uvicorn webapi.app:app --host 127.0.0.1 --port 8000
               <p class="adv-title">Output</p>
               <div class="grid">
                 <div class="field">
-                  <label for="below_beam">Show annotations below beam</label>
-                  <select id="below_beam" name="below_beam">
-                    <option value="false" selected>False</option>
-                    <option value="true">True</option>
-                  </select>
+                  <div class="radio-group">
+                    <label for="below_beam">
+                      <input id="below_beam" type="checkbox" name="below_beam" value="true" />
+                      Show annotations below beam
+                    </label>
+                  </div>
+                </div>
+                <div class="field full">
+                  <div class="radio-group">
+                    <label for="colorize_hands">
+                      <input id="colorize_hands" type="checkbox" name="colorize_hands" value="true" />
+                      Colorize by hand
+                    </label>
+                    <span class="colorize-inline">
+                      <span class="color-chip" id="lh_color_field">
+                        <label for="lh_color">LH</label>
+                        <input id="lh_color" name="lh_color" type="color" value="#1d4ed8" aria-label="Left hand color" />
+                      </span>
+                      <span class="color-chip" id="rh_color_field">
+                        <label for="rh_color">RH</label>
+                        <input id="rh_color" name="rh_color" type="color" value="#d62828" aria-label="Right hand color" />
+                      </span>
+                    </span>
+                  </div>
+                </div>
+                <div class="field full">
+                  <div class="radio-group">
+                    <label for="colorize_by_cost">
+                      <input id="colorize_by_cost" type="checkbox" name="colorize_by_cost" value="true" />
+                      Colorize by cost
+                    </label>
+                    <span class="colorize-inline">
+                      <span class="color-chip" id="cost_colormap_field">
+                        <label for="cost_colormap">Map</label>
+                        <select id="cost_colormap" name="cost_colormap">
+                          <option value="traffic" selected>traffic</option>
+                          <option value="viridis">viridis</option>
+                          <option value="plasma">plasma</option>
+                          <option value="magma">magma</option>
+                          <option value="coolwarm">coolwarm</option>
+                          <option value="turbo">turbo</option>
+                        </select>
+                      </span>
+                    </span>
+                  </div>
+                </div>
+                <div class="field full">
+                  <div class="radio-group">
+                    <label for="colorize_by_fingering">
+                      <input id="colorize_by_fingering" type="checkbox" name="colorize_by_fingering" value="true" />
+                      Colorize by fingering
+                    </label>
+                    <span class="colorize-inline">
+                      <span class="color-chip fingers-palette" id="fingering_colors_field">
+                        <label>Fingers</label>
+                        <span class="finger-chip">
+                          <span class="finger-label">1</span>
+                          <input id="finger_color_1" type="color" value="#ad3030" aria-label="Finger 1 color" />
+                        </span>
+                        <span class="finger-chip">
+                          <span class="finger-label">2</span>
+                          <input id="finger_color_2" type="color" value="#e06b18" aria-label="Finger 2 color" />
+                        </span>
+                        <span class="finger-chip">
+                          <span class="finger-label">3</span>
+                          <input id="finger_color_3" type="color" value="#097a32" aria-label="Finger 3 color" />
+                        </span>
+                        <span class="finger-chip">
+                          <span class="finger-label">4</span>
+                          <input id="finger_color_4" type="color" value="#3691ce" aria-label="Finger 4 color" />
+                        </span>
+                        <span class="finger-chip">
+                          <span class="finger-label">5</span>
+                          <input id="finger_color_5" type="color" value="#2054c4" aria-label="Finger 5 color" />
+                        </span>
+                        <input id="fingering_colors" name="fingering_colors" type="hidden" value="1:#ad3030,2:#e06b18,3:#097a32,4:#3691ce,5:#2054c4" />
+                      </span>
+                    </span>
+                  </div>
                 </div>
               </div>
             </section>
 
-            <section class="adv-group">
-              <p class="adv-title">Routing</p>
-              <div class="grid">
-                <div class="field full">
-                  <label for="auto_routing">Routing Mode</label>
-                  <select id="auto_routing" name="auto_routing">
-                    <option value="true" selected>Auto (recommended)</option>
-                    <option value="false">Manual</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="rpart">Right Part number</label>
-                  <input id="rpart" name="rpart" type="number" min="0" value="0" />
-                </div>
-                <div class="field">
-                  <label for="lpart">Left Part number</label>
-                  <input id="lpart" name="lpart" type="number" min="0" value="1" />
-                </div>
-                <div class="field">
-                  <label for="rstaff">Right Staff number (0=auto)</label>
-                  <input id="rstaff" name="rstaff" type="number" min="0" value="0" />
-                </div>
-                <div class="field">
-                  <label for="lstaff">Left Staff number (0=auto)</label>
-                  <input id="lstaff" name="lstaff" type="number" min="0" value="0" />
-                </div>
-              </div>
-            </section>
           </div>
         </div>
 
@@ -542,16 +689,16 @@ uvicorn webapi.app:app --host 127.0.0.1 --port 8000
         </div>
 
         <div class="output-note">
-          <b>Output:</b> the download is a MusicXML file with fingering annotations added to your score.<br />
-          Existing (pre-fingered) anchors are preserved and shown as circled numbers.<br />
-          You can open the result with MuseScore or any MusicXML-compatible viewer.
+          <b>Output:</b> MusicXML inputs return annotated MusicXML; MIDI/PIG inputs return annotated tabular text.<br />
+          Existing anchors are preserved; MusicXML results show them as circled numbers.<br />
+          MusicXML results can be opened with MuseScore or any MusicXML-compatible viewer.
         </div>
       </form>
     </section>
   </div>
 
   <a class="affiliation" href="https://www.elisava.net/en/" target="_blank" rel="noopener noreferrer" aria-label="Elisava website">
-    <img src="/images/Logo-Elisava-UVic-UCC-horizontal-negro.png" alt="Affiliation logo" />
+    <img src="images/Logo-Elisava-UVic-UCC-horizontal-negro.png" alt="Affiliation logo" />
   </a>
 
   <script>
@@ -561,6 +708,21 @@ uvicorn webapi.app:app --host 127.0.0.1 --port 8000
     const statusEl = document.getElementById("status");
     const submitBtn = document.getElementById("submit-btn");
     const autoRoutingEl = document.getElementById("auto_routing");
+    const belowBeamEl = document.getElementById("below_beam");
+    const colorizeHandsEl = document.getElementById("colorize_hands");
+    const colorizeByCostEl = document.getElementById("colorize_by_cost");
+    const colorizeByFingeringEl = document.getElementById("colorize_by_fingering");
+    const costColormapEl = document.getElementById("cost_colormap");
+    const costColormapFieldEl = document.getElementById("cost_colormap_field");
+    const fingeringColorsEl = document.getElementById("fingering_colors");
+    const fingerColorInputs = [1, 2, 3, 4, 5]
+      .map((finger) => document.getElementById(`finger_color_${finger}`))
+      .filter((el) => !!el);
+    const fingeringColorsFieldEl = document.getElementById("fingering_colors_field");
+    const rhColorEl = document.getElementById("rh_color");
+    const lhColorEl = document.getElementById("lh_color");
+    const rhColorFieldEl = document.getElementById("rh_color_field");
+    const lhColorFieldEl = document.getElementById("lh_color_field");
     const manualRoutingInputs = [
       document.getElementById("rpart"),
       document.getElementById("lpart"),
@@ -596,6 +758,67 @@ uvicorn webapi.app:app --host 127.0.0.1 --port 8000
     autoRoutingEl.addEventListener("change", syncRoutingMode);
     syncRoutingMode();
 
+    function buildFingeringColorSpec() {
+      return fingerColorInputs
+        .map((el, idx) => `${idx + 1}:${(el.value || "").trim()}`)
+        .join(",");
+    }
+
+    function syncFingeringColorSpec() {
+      if (!fingeringColorsEl) return;
+      fingeringColorsEl.value = buildFingeringColorSpec();
+    }
+
+    fingerColorInputs.forEach((el) => {
+      el.addEventListener("input", syncFingeringColorSpec);
+      el.addEventListener("change", syncFingeringColorSpec);
+    });
+    syncFingeringColorSpec();
+
+    function syncColorizeMode(ev) {
+      const source = ev && ev.target;
+      if (source) {
+        if (source.checked) {
+          if (source === colorizeHandsEl) {
+            if (colorizeByCostEl) colorizeByCostEl.checked = false;
+            if (colorizeByFingeringEl) colorizeByFingeringEl.checked = false;
+          } else if (source === colorizeByCostEl) {
+            if (colorizeHandsEl) colorizeHandsEl.checked = false;
+            if (colorizeByFingeringEl) colorizeByFingeringEl.checked = false;
+          } else if (source === colorizeByFingeringEl) {
+            if (colorizeHandsEl) colorizeHandsEl.checked = false;
+            if (colorizeByCostEl) colorizeByCostEl.checked = false;
+          }
+        }
+      }
+
+      const enabled = !!(colorizeHandsEl && colorizeHandsEl.checked);
+      const costMode = !!(colorizeByCostEl && colorizeByCostEl.checked);
+      const fingeringMode = !!(colorizeByFingeringEl && colorizeByFingeringEl.checked);
+      const allowManualColor = enabled && !costMode && !fingeringMode;
+      [rhColorEl, lhColorEl].forEach((el) => {
+        if (!el) return;
+        el.disabled = !allowManualColor;
+      });
+      [rhColorFieldEl, lhColorFieldEl].forEach((el) => {
+        if (!el) return;
+        el.classList.toggle("muted", !allowManualColor);
+      });
+      const allowCostColor = costMode && !enabled && !fingeringMode;
+      if (costColormapEl) costColormapEl.disabled = !allowCostColor;
+      if (costColormapFieldEl) costColormapFieldEl.classList.toggle("muted", !allowCostColor);
+
+      const allowFingeringColor = fingeringMode && !enabled && !costMode;
+      fingerColorInputs.forEach((el) => {
+        el.disabled = !allowFingeringColor;
+      });
+      if (fingeringColorsFieldEl) fingeringColorsFieldEl.classList.toggle("muted", !allowFingeringColor);
+    }
+    if (colorizeHandsEl) colorizeHandsEl.addEventListener("change", syncColorizeMode);
+    if (colorizeByCostEl) colorizeByCostEl.addEventListener("change", syncColorizeMode);
+    if (colorizeByFingeringEl) colorizeByFingeringEl.addEventListener("change", syncColorizeMode);
+    syncColorizeMode();
+
     fileInputEl.addEventListener("change", () => {
       const files = fileInputEl.files;
       if (files && files.length > 0) {
@@ -618,6 +841,15 @@ uvicorn webapi.app:app --host 127.0.0.1 --port 8000
         formData.delete("hand_mode");
         formData.set("left_only", handMode === "left" ? "true" : "false");
         formData.set("right_only", handMode === "right" ? "true" : "false");
+        formData.set("below_beam", belowBeamEl && belowBeamEl.checked ? "true" : "false");
+        formData.set("colorize_hands", colorizeHandsEl && colorizeHandsEl.checked ? "true" : "false");
+        formData.set("colorize_by_cost", colorizeByCostEl && colorizeByCostEl.checked ? "true" : "false");
+        formData.set(
+          "colorize_by_fingering",
+          colorizeByFingeringEl && colorizeByFingeringEl.checked ? "true" : "false",
+        );
+        syncFingeringColorSpec();
+        formData.set("fingering_colors", fingeringColorsEl ? fingeringColorsEl.value : "");
 
         const response = await fetch("/annotate", { method: "POST", body: formData });
         if (!response.ok) {

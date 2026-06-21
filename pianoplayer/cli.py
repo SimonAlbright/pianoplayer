@@ -22,10 +22,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-o",
         "--outputfile",
-        metavar="output.xml",
+        metavar="FILE",
         type=str,
-        help="Annotated output xml file name",
-        default="output.xml",
+        help="Annotated output file name (.xml or .txt by input format)",
+        default=None,
     )
     parser.add_argument(
         "-n",
@@ -86,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.set_defaults(auto_routing=True)
     parser.add_argument(
-        "--cost-path", metavar="", type=str, help="Path to save cost function", default=None
+        "--cost-path", metavar="", type=str, help="Path to save per-note cost CSV", default=None
     )
     parser.add_argument("--quiet", help="Switch off verbosity", action="store_true")
     parser.add_argument(
@@ -96,13 +96,58 @@ def build_parser() -> argparse.ArgumentParser:
         "-b", "--below-beam", help="Show fingering numbers below beam line", action="store_true"
     )
     parser.add_argument(
+        "--colorize-hands",
+        action="store_true",
+        help="Colorize annotated notes/fingerings by hand.",
+    )
+    parser.add_argument(
+        "--colorize-by-cost",
+        action="store_true",
+        help="Colorize notes/fingerings by computed cost.",
+    )
+    parser.add_argument(
+        "--colorize-by-fingering",
+        action="store_true",
+        help="Colorize notes/fingerings by fingering (1=red, 5=blue).",
+    )
+    parser.add_argument(
+        "--cost-colormap",
+        metavar="",
+        type=str,
+        choices=["traffic", "viridis", "plasma", "magma", "coolwarm", "turbo"],
+        default="traffic",
+        help="[traffic] Colormap used with --colorize-by-cost.",
+    )
+    parser.add_argument(
+        "--fingering-colors",
+        metavar="",
+        type=str,
+        default="",
+        help="Custom fingering colors, e.g. '1:#ff0000,2:#ffaa00,3:#00aa00,4:#3399ff,5:#2244dd'.",
+    )
+    parser.add_argument(
+        "--rh-color",
+        metavar="",
+        type=str,
+        default="#d62828",
+        help="[#d62828] Color for right-hand annotations/notes.",
+    )
+    parser.add_argument(
+        "--lh-color",
+        metavar="",
+        type=str,
+        default="#1d4ed8",
+        help="[#1d4ed8] Color for left-hand annotations/notes.",
+    )
+    parser.add_argument(
         "-v", "--with-vedo", help="Play 3D scene after processing", action="store_true"
     )
     parser.add_argument("-z", "--sound-off", help="Disable sound", action="store_true")
-    parser.add_argument(
+    hand_group = parser.add_mutually_exclusive_group()
+    hand_group.add_argument(
         "-l", "--left-only", help="Fingering for left hand only", action="store_true"
     )
-    parser.add_argument(
+    hand_group.add_argument(
         "-r", "--right-only", help="Fingering for right hand only", action="store_true"
     )
     parser.add_argument(
@@ -120,44 +165,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="[0.05] Chord note staggering in seconds for optimization.",
     )
     return parser
-
-
-def show_startup_banner(args: argparse.Namespace) -> None:
-    """Print a compact startup panel before the annotation run begins."""
-    if args.quiet or not args.filename:
-        return
-
-    if args.left_only:
-        hand_mode = "left hand only"
-    elif args.right_only:
-        hand_mode = "right hand only"
-    else:
-        hand_mode = "both hands"
-
-    lines = [
-        f"[bold]PianoPlayer[/bold] v{__version__}",
-        f"[dim]{__website__}[/dim]",
-        "",
-        f"[cyan]Input:[/cyan] {args.filename}",
-        f"[cyan]Output:[/cyan] {args.outputfile}",
-        f"[cyan]Mode:[/cyan] {hand_mode}",
-        f"[cyan]Hand size:[/cyan] {args.hand_size}",
-    ]
-    if args.sound_off:
-        lines.append("[cyan]Audio:[/cyan] off")
-
-    body = "\n".join(lines)
-    try:
-        from rich.console import Console
-        from rich.panel import Panel
-
-        Console().print(Panel.fit(body, border_style="bright_blue"))
-    except Exception:
-        print(f"PianoPlayer v{__version__}")
-        print(f"Input: {args.filename}")
-        print(f"Output: {args.outputfile}")
-        print(f"Mode: {hand_mode}")
-        print(f"Hand size: {args.hand_size}")
 
 
 def main() -> None:
@@ -188,7 +195,50 @@ def main() -> None:
     from pianoplayer import core
 
     try:
-        show_startup_banner(args)
+        if args.outputfile is None:
+            args.outputfile = core.default_output_filename(args.filename)
+        if not args.quiet and args.filename:
+            if args.left_only:
+                hand_mode = "left hand only"
+            elif args.right_only:
+                hand_mode = "right hand only"
+            else:
+                hand_mode = "both hands"
+
+            lines = [
+                f"[bold]PianoPlayer[/bold] v{__version__}",
+                f"[dim]{__website__}[/dim]",
+                "",
+                f"[cyan]Input:[/cyan] {args.filename}",
+                f"[cyan]Output:[/cyan] {args.outputfile}",
+                f"[cyan]Mode:[/cyan] {hand_mode}",
+                f"[cyan]Hand size:[/cyan] {args.hand_size}",
+            ]
+            if args.sound_off:
+                lines.append("[cyan]Audio:[/cyan] off")
+            if args.colorize_hands:
+                lines.append(f"[cyan]Colors:[/cyan] RH {args.rh_color} | LH {args.lh_color}")
+            if args.colorize_by_cost:
+                lines.append(f"[cyan]Colors:[/cyan] by cost ({args.cost_colormap})")
+            if args.colorize_by_fingering:
+                if args.fingering_colors:
+                    lines.append(f"[cyan]Colors:[/cyan] by fingering ({args.fingering_colors})")
+                else:
+                    lines.append("[cyan]Colors:[/cyan] by fingering (default palette)")
+
+            body = "\n".join(lines)
+            try:
+                from rich.console import Console
+                from rich.panel import Panel
+
+                Console().print(Panel.fit(body, border_style="bright_blue"))
+            except Exception:
+                print(f"PianoPlayer v{__version__}")
+                print(f"Input: {args.filename}")
+                print(f"Output: {args.outputfile}")
+                print(f"Mode: {hand_mode}")
+                print(f"Hand size: {args.hand_size}")
+
         # Enable progress UI by default unless quiet mode is requested.
         args._show_progress = not args.quiet
         core.annotate(args)

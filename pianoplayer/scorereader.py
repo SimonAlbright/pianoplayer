@@ -103,9 +103,6 @@ def reader_pretty_midi(
         chord_id += 1
         ii = jj
 
-    if len(noteseq) < 2:
-        logger.info("Beam is empty.")
-        return []
     return noteseq
 
 
@@ -150,7 +147,7 @@ def reader_PIG(fname: str, beam: int = 0) -> list[INote]:
             an.duration = max(0.0, off - onset)
             an.name = name[:-1]
             an.octave = int(name[-1])
-            an.fingering = 0 if finger == "_" else int(finger)
+            an.fingering = 0 if finger == "_" else abs(int(finger))
             an.is_anchor = an.fingering in {1, 2, 3, 4, 5}
             pc_map = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
             step = an.name[0]
@@ -159,7 +156,7 @@ def reader_PIG(fname: str, beam: int = 0) -> list[INote]:
             an.isBlack = (an.pitch % 12) in [1, 3, 6, 8, 10]
             noteseq.append(an)
         else:
-            for k, (_on, off, name, _finger) in enumerate(group):
+            for k, (_on, off, name, finger) in enumerate(group):
                 an = INote()
                 an.chordID = chord_id
                 an.noteID = note_id
@@ -171,7 +168,8 @@ def reader_PIG(fname: str, beam: int = 0) -> list[INote]:
                 an.duration = max(0.0, off - onset)
                 an.name = name[:-1]
                 an.octave = int(name[-1])
-                an.is_anchor = False
+                an.fingering = 0 if finger == "_" else abs(int(finger))
+                an.is_anchor = an.fingering in {1, 2, 3, 4, 5}
                 pc_map = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
                 step = an.name[0]
                 alter = an.name.count("#") - an.name.count("-")
@@ -182,7 +180,4 @@ def reader_PIG(fname: str, beam: int = 0) -> list[INote]:
 
         i = j
 
-    if len(noteseq) < 2:
-        logger.info("Beam is empty.")
-        return []
     return noteseq
